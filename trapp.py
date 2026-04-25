@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import FinanceDataReader as fdr
+import yfinance as yf
 from datetime import datetime, timedelta
 import io
 
@@ -9,112 +10,165 @@ import matplotlib.pyplot as plt
 plt.rcParams['font.family'] = 'Malgun Gothic'
 plt.rcParams['axes.unicode_minus'] = False
 
-@st.cache_data(show_spinner="종목 리스트 업데이트 중...")
-def get_stock_list():
+@st.cache_data(show_spinner="시장 데이터 업데이트 중...")
+def get_krx_list():
     try:
         df = fdr.StockListing('ETF/KR')
-        if 'Symbol' in df.columns: df = df.rename(columns={'Symbol': 'Code'})
-        return df[['Code', 'Name']]
+        df = df.rename(columns={'Symbol': 'Code'}) if 'Symbol' in df.columns else df
+        return df[['Code', 'Name']].dropna()
     except:
         return pd.DataFrame(columns=['Code', 'Name'])
 
-def calculate_cagr(df):
-    if len(df) < 20: return 0.0
-    three_years_ago = df.index[-1] - timedelta(days=3*365)
-    recent_df = df[df.index >= three_years_ago]
-    if recent_df.empty or len(recent_df) < 2: return 0.0
-    start_val = recent_df['Close'].iloc[0]
-    end_val = recent_df['Close'].iloc[-1]
-    years = (recent_df.index[-1] - recent_df.index[0]).days / 365.25
-    return (end_val / start_val) ** (1 / years) - 1 if years > 0 else 0.0
+@st.cache_data
+def get_exchange_rate():
+    try:
+        # 최신 환율 가져오기 (실패 시 기본값 1,350원)
+        df = fdr.DataReader('USD/KRW', datetime.now() - timedelta(days=7))
+        return float(df['Close'].iloc[-1])
+    except:
+        return 1350.0
 
-# 모바일에서도 쾌적하게 보이도록 레이아웃 설정
-st.set_page_config(page_title="ETF 적립 시뮬레이터", layout="centered") # 가로로 너무 퍼지지 않게 centered 사용
-st.title("💰 ETF 적립 시뮬레이터")
-
-# 모바일 사용자 안내 (사이드바 열기)
-st.caption("📱 모바일은 왼쪽 상단 [ > ] 버튼을 눌러 투자 설정을 변경하세요.")
-
-stock_list = get_stock_list()
-search_term = st.text_input("🔍 종목명 검색", "미국AI")
-
-if not stock_list.empty:
-    filtered = stock_list[stock_list['Name'].str.contains(search_term, case=False, na=False) | stock_list['Code'].str.contains(search_term, na=False)]
-    if not filtered.empty:
-        selected_display = st.selectbox("종목 선택", filtered['Name'] + " (" + filtered['Code'] + ")")
-        target_code = selected_display.split("(")[-1].replace(")", "")
-        target_name = selected_display.split(" (")[0]
-    else:
-        st.warning("검색 결과가 없습니다.")
-        target_code = None
-
-if target_code:
-    with st.sidebar:
-        st.header("⚙️ 투자 설정")
-        initial_shares = st.number_input("현재 보유 수량 (주)", min_value=0, value=8418)
-        monthly_invest = st.number_input("매월 추가 적립금 (원)", min_value=0, value=500000, step=100000)
-        dist_rate_input = st.number_input("예상 월 분배율 (%)", min_value=0.0, max_value=5.0, value=1.25, step=0.1)
-        reinvest_dist = st.checkbox("월 분배금 재투자 여부", value=True)
-        
-        st.divider()
-        growth_option = st.radio("미래 주가 성장률 설정", ["반영 안함 (0%)", "최근 3년 CAGR 반영", "연 3% 고정 성장"])
-        
-        start_date = st.date_input("투자 시작일", value=datetime.now().date())
-        end_date = st.date_input("예상 종료일", value=datetime(2032, 6, 30))
-
-    if st.button("🚀 시뮬레이션 실행", use_container_width=True): # 버튼도 폰 화면에 꽉 차게
-        df_history = fdr.DataReader(target_code)
-        if df_history.empty:
-            st.error("데이터 로드 실패")
+def get_price_data(symbol, market):
+    try:
+        if market == "한국":
+            df = fdr.DataReader(symbol)
         else:
-            if growth_option == "반영 안함 (0%)": applied_cagr = 0.0
-            elif growth_option == "최근 3년 CAGR 반영": applied_cagr = calculate_cagr(df_history)
-            else: applied_cagr = 0.03
-            
-            monthly_growth = (1 + applied_cagr) ** (1/12) - 1
-            monthly_dist_rate = dist_rate_input / 100
-            
-            total_shares = float(initial_shares)
-            current_price = df_history['Close'].iloc[-1]
-            initial_price = current_price
-            initial_monthly_dist = total_shares * (initial_price * monthly_dist_rate)
-            total_invested = total_shares * initial_price
-            
-            history = []
-            sim_months = pd.date_range(start=start_date, end=end_date, freq='MS')
-            
-            for i, date in enumerate(sim_months):
-                if i > 0: current_price *= (1 + monthly_growth)
-                dist_income = total_shares * (current_price * monthly_dist_rate)
-                if reinvest_dist: total_shares += dist_income / current_price
-                total_shares += monthly_invest / current_price
-                total_invested += monthly_invest
-                history.append({'회차': f"{i+1}회", '날짜': date.strftime('%y-%m'), '현재주가': current_price, '평가금액': total_shares * current_price, '보유수량': total_shares, '월분배금': total_shares * (current_price * monthly_dist_rate)})
+            df = yf.download(symbol, progress=False)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+        return df
+    except Exception as e:
+        st.error(f"{symbol} 데이터 로드 실패: {e}")
+        return pd.DataFrame()
 
-            res_df = pd.DataFrame(history)
-            f_row = res_df.iloc[-1]
-            
-            st.divider()
-            st.subheader(f"🏁 결과 요약 ({target_name})")
-            
-            # 모바일 최적화 요약 지표 (2개씩 배치)
-            m_col1, m_col2 = st.columns(2)
-            m_col1.metric("💰 최종 자산", f"{int(f_row['평가금액']):,}원")
-            m_col2.metric("📈 누적 수익률", f"{((f_row['평가금액']-total_invested)/total_invested*100):.1f}%")
-            
-            m_col3, m_col4 = st.columns(2)
-            m_col3.metric("📦 최종 수량", f"{int(f_row['보유수량']):,}주")
-            m_col4.metric("💵 월 분배금", f"{int(f_row['월분배금']):,}원")
+# --- UI 설정 ---
+st.set_page_config(page_title="글로벌 멀티 ETF 시뮬레이터", layout="wide")
+st.title("💰 글로벌 멀티 ETF 통합 시뮬레이터")
+st.caption("포트폴리오별 자산 성장과 월별 예상 분배금을 시뮬레이션합니다.")
 
-            st.divider()
-            st.subheader("🗓️ 월별 상세 내역")
-            # 모바일에서는 표가 옆으로 길면 보기 힘드므로 필요한 컬럼 위주로 배치
-            st.dataframe(res_df.style.format({'현재주가': '{:,.0f}', '평가금액': '{:,.0f}', '보유수량': '{:,.0f}', '월분배금': '{:,.0f}'}), use_container_width=True)
+krx_list = get_krx_list()
+current_usd_krw = get_exchange_rate()
 
-            # 저장 기능
+with st.sidebar:
+    st.header("📍 1단계: 포트폴리오 구성")
+    num_etfs = st.slider("ETF 개수", 1, 3, 2)
+    
+    etf_configs = []
+    for i in range(num_etfs):
+        with st.expander(f"ETF #{i+1} 설정", expanded=True):
+            market = st.radio(f"시장 #{i+1}", ["한국", "미국"], horizontal=True, key=f"m_{i}")
+            
+            if market == "한국":
+                search = st.text_input(f"종목명/코드 검색", "미국AI", key=f"s_{i}")
+                filtered = krx_list[
+                    krx_list['Name'].str.contains(search, case=False, na=False) | 
+                    krx_list['Code'].str.contains(search, case=False, na=False)
+                ]
+                if not filtered.empty:
+                    sel = st.selectbox(f"종목 선택", filtered['Name'] + " (" + filtered['Code'] + ")", key=f"sel_{i}")
+                    code = sel.split("(")[-1].replace(")", "")
+                    name = sel.split(" (")
+                else:
+                    st.warning("결과 없음")
+                    code, name = None, None
+            else:
+                code = st.text_input(f"티커 입력 (예: SCHD, JEPI)", "SCHD" if i==0 else "JEPI", key=f"c_{i}").upper()
+                name = code
+
+            init_qty = st.number_input(f"현재 보유 수량", min_value=0.0, value=10.0, key=f"q_{i}")
+            monthly_val = st.number_input(f"월 적립금 (원)", min_value=0, value=300000, step=50000, key=f"v_{i}")
+            dist_rate = st.number_input(f"예상 월 분배율 (%)", 0.0, 5.0, 0.8, step=0.1, key=f"d_{i}", help="월간 배당 수익률을 입력하세요.")
+            
+            etf_configs.append({
+                'idx': i+1, 'code': code, 'name': name, 'market': market, 
+                'init_qty': init_qty, 'monthly_val': monthly_val, 'dist_rate': dist_rate
+            })
+
+    st.header("⚙️ 2단계: 공통 시나리오")
+    growth_scenario = st.select_slider("예상 연간 주가 성장률 (%)", options=[-10, -5, 0, 3, 5, 8, 10, 15, 20], value=5)
+    reinvest_on = st.checkbox("분배금 재투자 하기", value=True)
+    start_date = st.date_input("투자 시작일", datetime.now())
+    end_date = st.date_input("예상 종료일", datetime(2030, 12, 31))
+
+# --- 시뮬레이션 엔진 ---
+if st.button("🚀 통합 시뮬레이션 시작", width="stretch"):
+    if not all(c['code'] for c in etf_configs):
+        st.error("모든 ETF를 선택해주세요.")
+    else:
+        with st.spinner("데이터 분석 및 시뮬레이션 중..."):
+            results_by_etf = []
+            for config in etf_configs:
+                df_h = get_price_data(config['code'], config['market'])
+                if df_h.empty: continue
+                
+                last_price = float(df_h['Close'].iloc[-1])
+                if config['market'] == "미국":
+                    last_price *= current_usd_krw
+                
+                curr_p, qty, invested = last_price, float(config['init_qty']), float(config['init_qty']) * last_price
+                m_growth, m_dist = (1 + growth_scenario/100)**(1/12) - 1, (config['dist_rate']/100)
+                
+                months = pd.date_range(start_date, end_date, freq='MS')
+                etf_data = []
+                for i, date in enumerate(months):
+                    if i > 0: curr_p *= (1 + m_growth)
+                    
+                    # 월 분배금 계산 (현재 자산 가치 기준)
+                    monthly_income = (qty * curr_p) * m_dist
+                    
+                    if reinvest_on:
+                        qty += monthly_income / curr_p
+                    
+                    qty += config['monthly_val'] / curr_p
+                    invested += config['monthly_val']
+                    
+                    etf_data.append({
+                        '날짜': date.strftime('%Y-%m'),
+                        f"#{config['idx']} {config['name']}_평가금": qty * curr_p,
+                        f"#{config['idx']} {config['name']}_분배금": monthly_income,
+                        f"#{config['idx']} {config['name']}_투자금": invested
+                    })
+                results_by_etf.append(pd.DataFrame(etf_data).set_index('날짜'))
+
+            final_df = pd.concat(results_by_etf, axis=1)
+            
+            # 총합 계산 (중복 컬럼 방지 로직 적용됨)
+            eval_cols = [c for c in final_df.columns if '평가금' in c]
+            dist_cols = [c for c in final_df.columns if '분배금' in c]
+            inv_cols = [c for c in final_df.columns if '투자금' in c]
+            
+            final_df['총평가금액'] = final_df[eval_cols].sum(axis=1)
+            final_df['총월분배금'] = final_df[dist_cols].sum(axis=1)
+            final_df['총투자금'] = final_df[inv_cols].sum(axis=1)
+            
+            # --- 결과 리포트 ---
             st.divider()
-            file_name = st.text_input("📁 파일명", value=f"sim_{target_name}")
+            f_row = final_df.iloc[-1]
+            i_row = final_df.iloc[0]
+            
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("최종 자산", f"{int(f_row['총평가금액']):,}원", 
+                      delta=f"{int(f_row['총평가금액'] - f_row['총투자금']):,}원 수익")
+            c2.metric("최종 월 분배금", f"{int(f_row['총월분배금']):,}원",
+                      delta=f"{int(f_row['총월분배금'] - i_row['총월분배금']):,}원 증액")
+            c3.metric("총 투입 원금", f"{int(f_row['총투자금']):,}원")
+            c4.metric("누적 수익률", f"{((f_row['총평가금액']-f_row['총투자금'])/f_row['총투자금']*100):.1f}%")
+
+            # 시각화 차트 (탭으로 구분)
+            tab1, tab2 = st.tabs(["📈 자산 및 원금 성장", "💵 월 배당금 흐름"])
+            with tab1:
+                st.area_chart(final_df[['총평가금액', '총투자금']])
+            with tab2:
+                st.bar_chart(final_df['총월분배금'])
+
+            with st.expander("📝 월별 상세 내역 (데이터 테이블)"):
+                st.dataframe(final_df.style.format('{:,.0f}원'), width="stretch")
+
+            # 엑셀 저장
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                res_df.to_excel(writer, sheet_name='상세', index=False)
-            st.download_button(label="📁 엑셀 다운로드", data=buffer.getvalue(), file_name=f"{file_name}.xlsx", use_container_width=True)
+                final_df.to_excel(writer, sheet_name='시뮬레이션_상세')
+            st.download_button(label="📥 시뮬레이션 결과 엑셀 저장", data=buffer.getvalue(), 
+                               file_name=f"global_portfolio_{datetime.now().strftime('%y%m%d')}.xlsx")
+
+st.info(f"💡 현재 환율: 1 USD = {current_usd_krw:,.2f} KRW (미국 종목은 원화 환산 시뮬레이션 적용)")
