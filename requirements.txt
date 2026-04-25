@@ -4,4 +4,3 @@ FinanceDataReader
 yfinance
 openpyxl
 matplotlib
-
