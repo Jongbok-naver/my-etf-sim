@@ -1,5 +1,5 @@
-streamlit
-pandas
-FinanceDataReader
-yfinance
+streamlit==1.31.0
+pandas==2.1.4
+FinanceDataReader==0.9.60
+yfinance==0.2.36
 openpyxl
