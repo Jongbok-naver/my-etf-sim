@@ -1,5 +1,7 @@
 streamlit
 pandas
-finance-datareader
-matplotlib
+FinanceDataReader
+yfinance
 openpyxl
+matplotlib
+
