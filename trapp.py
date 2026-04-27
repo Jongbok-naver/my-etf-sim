@@ -76,15 +76,15 @@ with tab_config:
             c1, c2, c3 = st.columns(3)
             q_init = c1.number_input(f"현재 수량", min_value=0.0, value=10.0, key=f"q_{i}")
             m_pay = c2.number_input(f"월 적립금(원)", min_value=0, value=500000, key=f"v_{i}")
-            d_rate = c3.number_input(f"연 분기율(%)", 0.0, 20.0, 1.0 if i==0 else 1.0, key=f"d_{i}")
+            d_rate = c3.number_input(f"연 분기율(%)", 0.0, 20.0, 1.0 if i==0 else 4.0, key=f"d_{i}")
             
             configs.append({'code': code, 'name': name, 'mkt': mkt, 'q_init': q_init, 'm_pay': m_pay, 'd_rate': (d_rate/100)/12})
 
 with tab_scenario:
     c1, c2 = st.columns(2)
     start_date = c1.date_input("투자 시작일", datetime.now())
-    end_date = c2.date_input("투자 종료일", datetime(2032, 06, 30))
-    growth = st.slider("기대 연 성장률(%)", -10, 20, 3)
+    end_date = c2.date_input("투자 종료일", datetime(2035, 12, 31))
+    growth = st.slider("기대 연 성장률(%)", -10, 20, 7)
     reinvest = st.checkbox("분배금 재투자", value=True)
 
 # --- 실행 버튼 ---
