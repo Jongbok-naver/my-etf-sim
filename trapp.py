@@ -31,7 +31,8 @@ def get_price_data(symbol, market):
             df = fdr.DataReader(symbol)
         else:
             # yfinance 멀티인덱스 오류 방지 로직 추가
-            df = yf.download(symbol, period="5d", progress=False)
+            # df = yf.download(symbol, period="5d", progress=False)
+            df = yf.download(symbol, period="1d", interval="1m", progress=False) 
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
         return df
