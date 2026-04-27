@@ -148,9 +148,15 @@ if st.button("🚀 시뮬레이션 시작", use_container_width=True):
                 
                 st.subheader("📈 자산 성장 추이")
                 st.line_chart(res[['총평가금', '총투자금']])
-                
-                st.subheader("💵 월 분배금 흐름")
+
+                st.subheader("💵 월별 예상 분배금")
                 st.bar_chart(res['총분배금'])
-                
+
+                # 이 부분을 수정하세요!
                 with st.expander("📝 상세 내역 보기"):
-                    st.dataframe(res.astype(int), use_container_width=True)
+                    # float를 int로 바꾸고 콤마 포맷팅 적용
+                    formatted_df = res.copy()
+                    for col in formatted_df.columns:
+                        formatted_df[col] = formatted_df[col].apply(lambda x: f"{int(x):,}")
+                    
+                    st.dataframe(formatted_df, use_container_width=True)
