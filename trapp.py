@@ -19,18 +19,27 @@ def get_kr_list():
     except:
         return pd.DataFrame(columns=['Code', 'Name'])
 
-# 3. 가격 데이터 로딩 (보안 장치 강화)
+# 3. 가격 데이터 로딩 (멀티 소스 전략)
 def get_current_price(symbol, market):
-    ticker_symbol = f"{symbol}.KS" if market == "한국" else symbol
-    
-    # [장치 1] 최대 3번까지 재시도 (서버 지연 대응)
-    for _ in range(3):
+    # [방법 1] 한국 시장일 경우 FinanceDataReader 우선 사용 (에러 거의 없음)
+    if market == "한국":
         try:
-            # [장치 2] Ticker 대신 download 사용 (서버 차단 회피에 더 유리)
+            # 최근 10일치 데이터를 가져와서 마지막 종가 추출
+            df = fdr.DataReader(symbol)
+            if not df.empty:
+                return float(df['Close'].iloc[-1])
+        except:
+            pass # 실패 시 야후 시도
+
+    # [방법 2] 미국 시장 혹은 한국 데이터 실패 시 야후 사용
+    ticker_symbol = f"{symbol}.KS" if market == "한국" else symbol
+    for _ in range(2): # 2번 재시도
+        try:
+            # 가장 가벼운 방식으로 호출
             df = yf.download(ticker_symbol, period="5d", interval="1d", progress=False, show_errors=False)
             if not df.empty:
                 return float(df['Close'].iloc[-1])
-            time.sleep(0.5) # 실패 시 잠시 대기
+            time.sleep(0.5)
         except:
             time.sleep(0.5)
             continue
@@ -54,15 +63,16 @@ with st.sidebar:
             
             if mkt == "한국":
                 search = st.text_input(f"종목명 검색 #{i+1}", value=default_search, key=f"s_{i}")
-                filtered = kr_list[kr_list['Name'].str.contains(search, na=False, case=False)] if not kr_list.empty else pd.DataFrame()
-                
-                if not filtered.empty:
-                    # [장치 3] 자동으로 첫 번째 항목 선택 (연동 오류 방지)
-                    sel = st.selectbox(f"종목 선택 #{i+1}", filtered['Name'] + " (" + filtered['Code'] + ")", index=0, key=f"sel_{i}")
-                    code = sel.split("(")[-1].replace(")", "")
-                    name = sel.split(" (")[0]
+                if not kr_list.empty:
+                    filtered = kr_list[kr_list['Name'].str.contains(search, na=False, case=False)]
+                    if not filtered.empty:
+                        sel = st.selectbox(f"종목 선택 #{i+1}", filtered['Name'] + " (" + filtered['Code'] + ")", index=0, key=f"sel_{i}")
+                        code = sel.split("(")[-1].replace(")", "")
+                        name = sel.split(" (")
+                    else:
+                        st.warning("결과 없음")
+                        code, name = None, None
                 else:
-                    st.warning("결과 없음")
                     code, name = None, None
             else:
                 code = st.text_input(f"미국 티커 #{i+1}", "QQQ", key=f"c_{i}").upper()
@@ -89,7 +99,7 @@ if st.button("🚀 시뮬레이션 시작", use_container_width=True):
     elif start_date >= end_date:
         st.error("종료일은 시작일보다 이후여야 합니다.")
     else:
-        with st.spinner("최신 금융 데이터를 가져오는 중..."):
+        with st.spinner("최신 데이터를 확보하는 중..."):
             months_diff = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
             month_range = pd.date_range(start=start_date, periods=max(months_diff, 1) + 1, freq='MS')
             
@@ -98,8 +108,7 @@ if st.button("🚀 시뮬레이션 시작", use_container_width=True):
                 price = get_current_price(config['code'], config['mkt'])
                 
                 if price is None:
-                    # 데이터 실패 시 다시 한번 시도하라는 안내
-                    st.error(f"❌ '{config['name']}({config['code']})' 데이터를 일시적으로 가져올 수 없습니다. 잠시 후 버튼을 다시 눌러주세요.")
+                    st.error(f"❌ '{config['name']}({config['code']})' 가격 획득 실패. (잠시 후 다시 시도)")
                     continue
                 
                 p = price * usd_krw if config['mkt'] == "미국" else price
