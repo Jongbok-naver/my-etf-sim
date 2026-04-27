@@ -19,30 +19,19 @@ def get_kr_list():
     except:
         return pd.DataFrame(columns=['Code', 'Name'])
 
-# 3. 가격 데이터 로딩 (멀티 소스 전략)
+# 3. 가격 데이터 로딩 (안정성 최우선)
 def get_current_price(symbol, market):
-    # [방법 1] 한국 시장일 경우 FinanceDataReader 우선 사용 (에러 거의 없음)
     if market == "한국":
         try:
-            # 최근 10일치 데이터를 가져와서 마지막 종가 추출
             df = fdr.DataReader(symbol)
-            if not df.empty:
-                return float(df['Close'].iloc[-1])
-        except:
-            pass # 실패 시 야후 시도
+            if not df.empty: return float(df['Close'].iloc[-1])
+        except: pass
 
-    # [방법 2] 미국 시장 혹은 한국 데이터 실패 시 야후 사용
     ticker_symbol = f"{symbol}.KS" if market == "한국" else symbol
-    for _ in range(2): # 2번 재시도
-        try:
-            # 가장 가벼운 방식으로 호출
-            df = yf.download(ticker_symbol, period="5d", interval="1d", progress=False, show_errors=False)
-            if not df.empty:
-                return float(df['Close'].iloc[-1])
-            time.sleep(0.5)
-        except:
-            time.sleep(0.5)
-            continue
+    try:
+        df = yf.download(ticker_symbol, period="5d", interval="1d", progress=False, show_errors=False)
+        if not df.empty: return float(df['Close'].iloc[-1])
+    except: pass
     return None
 
 # --- UI 메인 ---
@@ -63,17 +52,13 @@ with st.sidebar:
             
             if mkt == "한국":
                 search = st.text_input(f"종목명 검색 #{i+1}", value=default_search, key=f"s_{i}")
-                if not kr_list.empty:
-                    filtered = kr_list[kr_list['Name'].str.contains(search, na=False, case=False)]
-                    if not filtered.empty:
-                        sel = st.selectbox(f"종목 선택 #{i+1}", filtered['Name'] + " (" + filtered['Code'] + ")", index=0, key=f"sel_{i}")
-                        code = sel.split("(")[-1].replace(")", "")
-                        name = sel.split(" (")
-                    else:
-                        st.warning("결과 없음")
-                        code, name = None, None
+                filtered = kr_list[kr_list['Name'].str.contains(search, na=False, case=False)] if not kr_list.empty else pd.DataFrame()
+                if not filtered.empty:
+                    sel = st.selectbox(f"종목 선택 #{i+1}", filtered['Name'] + " (" + filtered['Code'] + ")", index=0, key=f"sel_{i}")
+                    code = sel.split("(")[-1].replace(")", "")
+                    name = sel.split(" (")[0]
                 else:
-                    code, name = None, None
+                    st.warning("결과 없음"); code, name = None, None
             else:
                 code = st.text_input(f"미국 티커 #{i+1}", "QQQ", key=f"c_{i}").upper()
                 name = code
@@ -87,49 +72,55 @@ with st.sidebar:
     st.header("📅 시나리오 설정")
     start_date = st.date_input("투자 시작일", datetime.now())
     end_date = st.date_input("투자 종료일", datetime(2035, 12, 31))
-    growth = st.slider("연 성장률(%)", -10, 20, 5)
+    growth = st.slider("기대 연 성장률(%)", -10, 20, 5)
     reinvest = st.checkbox("분배금 재투자", value=True)
 
-# --- 시뮬레이션 계산 ---
+# --- 시뮬레이션 엔진 (정교화된 로직) ---
 if st.button("🚀 시뮬레이션 시작", use_container_width=True):
-    valid_configs = [c for c in etf_configs if c['code'] is not None]
+    valid_configs = [c for c in etf_configs if c['code']]
     
     if not valid_configs:
-        st.error("종목이 선택되지 않았습니다.")
+        st.error("종목을 선택해주세요.")
     elif start_date >= end_date:
-        st.error("종료일은 시작일보다 이후여야 합니다.")
+        st.error("종료일이 시작일보다 뒤여야 합니다.")
     else:
-        with st.spinner("최신 데이터를 확보하는 중..."):
+        with st.spinner("미래 자산을 정밀 계산 중..."):
             months_diff = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
-            month_range = pd.date_range(start=start_date, periods=max(months_diff, 1) + 1, freq='MS')
+            month_range = pd.date_range(start=start_date, periods=max(months_diff, 1), freq='MS')
             
             all_results = []
             for config in valid_configs:
                 price = get_current_price(config['code'], config['mkt'])
+                if price is None: continue
                 
-                if price is None:
-                    st.error(f"❌ '{config['name']}({config['code']})' 가격 획득 실패. (잠시 후 다시 시도)")
-                    continue
-                
+                # 1. 초기 세팅 (원화 환산)
                 p = price * usd_krw if config['mkt'] == "미국" else price
                 qty = float(config['qty'])
-                inv = qty * p
-                m_g = (1 + growth/100)**(1/12) - 1
-                m_d = (config['dist'] / 100) / 12 
+                inv = qty * p # 초기 투자금
+                
+                m_g = (1 + growth/100)**(1/12) - 1 # 월 성장률
+                m_d = (config['dist'] / 100) / 12  # 월 분배율
                 
                 history = []
                 for i, date in enumerate(month_range):
-                    if i > 0: p *= (1 + m_g)
+                    # [단계 1] 자산 평가 (전월 가격 변동 반영)
+                    if i > 0:
+                        p *= (1 + m_g)
+                    
+                    # [단계 2] 월 적립금 투입 (두 번째 달부터)
                     if i > 0:
                         qty += config['val'] / p
                         inv += config['val']
                     
-                    div = (qty * p) * m_d
-                    if reinvest: qty += div / p
+                    # [단계 3] 분배금 발생 및 재투자
+                    eval_amt = qty * p
+                    div = eval_amt * m_d
+                    if reinvest:
+                        qty += div / p
                     
                     history.append({
                         "날짜": date.strftime('%Y-%m'),
-                        f"#{config['idx']} 평가금": qty * p,
+                        f"#{config['idx']} 평가금": eval_amt,
                         f"#{config['idx']} 분배금": div,
                         f"#{config['idx']} 투자금": inv
                     })
@@ -144,13 +135,12 @@ if st.button("🚀 시뮬레이션 시작", use_container_width=True):
                 f = res.iloc[-1]
                 st.divider()
                 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("최종 자산", f"{int(f['총평가금']):,}원")
-                c2.metric("최종 월분배금", f"{int(f['총분배금']):,}원")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("최종 자산", f"{int(f['총평가금']):,}원")
+                m2.metric("최종 월분배금", f"{int(f['총분배금']):,}원")
                 roi = ((f['총평가금']-f['총투자금'])/f['총투자금']*100) if f['총투자금'] > 0 else 0
-                c3.metric("누적 수익률", f"{roi:.1f}%")
+                m3.metric("누적 수익률", f"{roi:.1f}%")
                 
-                st.subheader("📈 자산 성장 추이")
                 st.line_chart(res[['총평가금', '총투자금']])
                 
                 with st.expander("📝 상세 내역 보기"):
