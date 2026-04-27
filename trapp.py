@@ -7,7 +7,7 @@ from datetime import datetime
 # 1. 페이지 설정
 st.set_page_config(page_title="Global Multi-ETF", layout="wide")
 
-# 2. 한국 ETF 리스트 (캐싱 및 예외 처리)
+# 2. 한국 ETF 리스트
 @st.cache_data(ttl=86400)
 def get_kr_list():
     try:
@@ -18,24 +18,18 @@ def get_kr_list():
     except:
         return pd.DataFrame(columns=['Code', 'Name'])
 
-# 3. 가격 데이터 로딩 (가장 강력한 예외 처리)
+# 3. 가격 데이터 로딩 (가장 초기의 인덱스 방식 복구)
 def get_current_price(symbol, market):
     try:
         ticker_symbol = f"{symbol}.KS" if market == "한국" else symbol
-        # 1일치 데이터만 아주 가볍게 가져옴
-        ticker = yf.Ticker(ticker_symbol)
-        df = ticker.history(period="1d")
+        # group_by='column'을 추가하여 데이터 구조를 강제로 단순화
+        df = yf.download(ticker_symbol, period="1d", progress=False, group_by='column')
         if df.empty:
             return None
         
-        # 데이터 구조(멀티인덱스 등)에 상관없이 마지막 종가 추출
-        last_price = df['Close'].iloc[-1]
-        
-        # 만약 결과가 Series라면 첫 번째 값 선택
-        if isinstance(last_price, pd.Series):
-            last_price = last_price.iloc[0]
-        return float(last_price)
-    except Exception as e:
+        # 원본에서 사용하던 가장 단순한 형태의 Close 데이터 추출
+        return float(df['Close'].iloc[-1])
+    except:
         return None
 
 # --- UI 메인 ---
@@ -57,7 +51,7 @@ with st.sidebar:
                     if not filtered.empty:
                         sel = st.selectbox(f"종목 선택 #{i+1}", filtered['Name'] + " (" + filtered['Code'] + ")", key=f"sel_{i}")
                         code = sel.split("(")[-1].replace(")", "")
-                        name = sel.split(" (")[0]
+                        name = sel.split(" (")
                     else:
                         st.warning("결과 없음")
                         code, name = None, None
@@ -85,16 +79,14 @@ if st.button("🚀 시뮬레이션 시작", use_container_width=True):
     elif start_date >= end_date:
         st.error("종료일은 시작일보다 이후여야 합니다.")
     else:
-        with st.spinner("데이터 로딩 및 계산 중..."):
+        with st.spinner("데이터 로딩 중..."):
             months_diff = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
-            if months_diff < 1:
-                months_diff = 1
-            month_range = pd.date_range(start=start_date, periods=months_diff + 1, freq='MS')
+            month_range = pd.date_range(start=start_date, periods=max(months_diff, 1) + 1, freq='MS')
             all_results = []
             for config in valid_configs:
                 price = get_current_price(config['code'], config['mkt'])
                 if price is None:
-                    st.error(f"❌ '{config['name']}({config['code']})'의 가격 데이터를 가져오지 못했습니다.")
+                    st.error(f"❌ '{config['name']}' 데이터를 가져오지 못했습니다.")
                     continue
                 p = price * usd_krw if config['mkt'] == "미국" else price
                 qty, inv = float(config['qty']), float(config['qty']) * p
@@ -129,9 +121,6 @@ if st.button("🚀 시뮬레이션 시작", use_container_width=True):
                 c1.metric("최종 자산", f"{int(f['총평가금']):,}원")
                 c2.metric("최종 월분배금", f"{int(f['총분배금']):,}원")
                 c3.metric("누적 수익률", f"{((f['총평가금']-f['총투자금'])/f['총투자금']*100):.1f}%")
-                st.subheader("📈 자산 성장 추이")
                 st.line_chart(res[['총평가금', '총투자금']])
-                st.subheader("💵 월별 예상 분배금")
-                st.bar_chart(res['총분배금'])
                 with st.expander("📝 상세 내역 보기"):
                     st.dataframe(res.astype(int), use_container_width=True)
