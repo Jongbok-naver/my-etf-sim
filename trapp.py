@@ -3,7 +3,6 @@ import pandas as pd
 import yfinance as yf
 import FinanceDataReader as fdr
 from datetime import datetime
-import time
 
 # 1. 페이지 설정
 st.set_page_config(page_title="Global Multi-ETF", layout="wide")
@@ -19,19 +18,23 @@ def get_kr_list():
     except:
         return pd.DataFrame(columns=['Code', 'Name'])
 
-# 3. 가격 데이터 로딩 (안정성 최우선)
+# 3. 가격 데이터 로딩 (가장 확실한 방식)
 def get_current_price(symbol, market):
-    if market == "한국":
-        try:
+    try:
+        # 한국 시장은 fdr이 가장 정확함
+        if market == "한국":
             df = fdr.DataReader(symbol)
             if not df.empty: return float(df['Close'].iloc[-1])
-        except: pass
-
-    ticker_symbol = f"{symbol}.KS" if market == "한국" else symbol
-    try:
-        df = yf.download(ticker_symbol, period="5d", interval="1d", progress=False, show_errors=False)
-        if not df.empty: return float(df['Close'].iloc[-1])
-    except: pass
+        
+        # 미국 시장 및 한국 실패 시 yfinance
+        ticker_symbol = f"{symbol}.KS" if market == "한국" else symbol
+        ticker = yf.Ticker(ticker_symbol)
+        df = ticker.history(period="1d")
+        if not df.empty:
+            last_price = df['Close'].iloc[-1]
+            return float(last_price.iloc[0]) if isinstance(last_price, pd.Series) else float(last_price)
+    except:
+        pass
     return None
 
 # --- UI 메인 ---
@@ -42,11 +45,13 @@ usd_krw = 1380.0
 
 with st.sidebar:
     st.header("📍 포트폴리오 구성")
-    num_etfs = st.slider("ETF 개수", 1, 5, 2)
+    num_etfs = st.slider("ETF 개수", 1, 3, 2) # 원본대로 최대 3개
     etf_configs = []
     
     for i in range(num_etfs):
-        default_search = "미국AI" if i == 0 else ("배당" if i == 1 else "")
+        # 초기 검색어 설정 (요청하신 대로)
+        default_search = "미국AI" if i == 0 else ("배당" if i == 1 else "배당")
+        
         with st.expander(f"ETF #{i+1} 설정", expanded=True):
             mkt = st.radio(f"시장 #{i+1}", ["한국", "미국"], key=f"m_{i}", horizontal=True)
             
@@ -63,70 +68,75 @@ with st.sidebar:
                 code = st.text_input(f"미국 티커 #{i+1}", "QQQ", key=f"c_{i}").upper()
                 name = code
                 
-            q = st.number_input(f"현재 수량 #{i+1}", min_value=0.0, value=10.0, key=f"q_{i}")
-            v = st.number_input(f"월 적립금(원) #{i+1}", min_value=0, value=300000, key=f"v_{i}")
-            d = st.number_input(f"연 분배율(%) #{i+1}", 0.0, 20.0, 1.0 if i==0 else 4.0, key=f"d_{i}")
+            q = st.number_input(f"현재 수량 #{i+1}", min_value=0.0, value=5090.0, key=f"q_{i}")
+            v = st.number_input(f"월 적립금(원) #{i+1}", min_value=0, value=0, key=f"v_{i}")
+            d = st.number_input(f"월 분배율(%) #{i+1}", 0.0, 5.0, 1.25 if i==0 else 0.8, key=f"d_{i}")
             
             etf_configs.append({'idx':i+1, 'code':code, 'name':name, 'mkt':mkt, 'qty':q, 'val':v, 'dist':d})
 
     st.header("📅 시나리오 설정")
     start_date = st.date_input("투자 시작일", datetime.now())
-    end_date = st.date_input("투자 종료일", datetime(2035, 12, 31))
-    growth = st.slider("기대 연 성장률(%)", -10, 20, 5)
+    end_date = st.date_input("투자 종료일", datetime(2032, 6, 30))
+    growth = st.slider("연 성장률(%)", -10, 20, 0)
     reinvest = st.checkbox("분배금 재투자", value=True)
 
-# --- 시뮬레이션 엔진 (정교화된 로직) ---
+# --- 시뮬레이션 계산 ---
 if st.button("🚀 시뮬레이션 시작", use_container_width=True):
-    valid_configs = [c for c in etf_configs if c['code']]
+    valid_configs = [c for c in etf_configs if c['code'] is not None]
     
     if not valid_configs:
-        st.error("종목을 선택해주세요.")
+        st.error("종목이 선택되지 않았습니다.")
     elif start_date >= end_date:
-        st.error("종료일이 시작일보다 뒤여야 합니다.")
+        st.error("종료일은 시작일보다 이후여야 합니다.")
     else:
-        with st.spinner("미래 자산을 정밀 계산 중..."):
+        with st.spinner("계산 중..."):
+            # 원본 방식대로 날짜 범위 생성
             months_diff = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
-            month_range = pd.date_range(start=start_date, periods=max(months_diff, 1), freq='MS')
+            month_range = pd.date_range(start=start_date, periods=months_diff + 1, freq='MS')
             
             all_results = []
             for config in valid_configs:
                 price = get_current_price(config['code'], config['mkt'])
-                if price is None: continue
+                if price is None:
+                    st.error(f"'{config['code']}' 데이터를 가져오지 못했습니다.")
+                    continue
                 
-                # 1. 초기 세팅 (원화 환산)
+                # 초기 세팅
                 p = price * usd_krw if config['mkt'] == "미국" else price
                 qty = float(config['qty'])
                 inv = qty * p # 초기 투자금
                 
-                m_g = (1 + growth/100)**(1/12) - 1 # 월 성장률
-                m_d = (config['dist'] / 100) / 12  # 월 분배율
+                m_g = (1 + growth/100)**(1/12) - 1
+                m_d = config['dist'] / 100 # 원본대로 '월 분배율'로 사용
                 
                 history = []
                 for i, date in enumerate(month_range):
-                    # [단계 1] 자산 평가 (전월 가격 변동 반영)
+                    # 1. 가격 상승 반영 (두 번째 달부터)
                     if i > 0:
                         p *= (1 + m_g)
                     
-                    # [단계 2] 월 적립금 투입 (두 번째 달부터)
+                    # 2. 분배금 발생
+                    div = (qty * p) * m_d
+                    
+                    # 3. 분배금 재투자
+                    if reinvest:
+                        qty += div / p
+                        
+                    # 4. 월 적립금 투입 (두 번째 달부터)
                     if i > 0:
                         qty += config['val'] / p
                         inv += config['val']
                     
-                    # [단계 3] 분배금 발생 및 재투자
-                    eval_amt = qty * p
-                    div = eval_amt * m_d
-                    if reinvest:
-                        qty += div / p
-                    
                     history.append({
                         "날짜": date.strftime('%Y-%m'),
-                        f"#{config['idx']} 평가금": eval_amt,
+                        f"#{config['idx']} 평가금": qty * p,
                         f"#{config['idx']} 분배금": div,
                         f"#{config['idx']} 투자금": inv
                     })
                 all_results.append(pd.DataFrame(history).set_index("날짜"))
 
             if all_results:
+                # 결과 통합
                 res = pd.concat(all_results, axis=1)
                 res['총평가금'] = res.filter(like='평가금').sum(axis=1)
                 res['총투자금'] = res.filter(like='투자금').sum(axis=1)
@@ -135,12 +145,13 @@ if st.button("🚀 시뮬레이션 시작", use_container_width=True):
                 f = res.iloc[-1]
                 st.divider()
                 
-                m1, m2, m3 = st.columns(3)
-                m1.metric("최종 자산", f"{int(f['총평가금']):,}원")
-                m2.metric("최종 월분배금", f"{int(f['총분배금']):,}원")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("최종 자산", f"{int(f['총평가금']):,}원")
+                c2.metric("최종 월분배금", f"{int(f['총분배금']):,}원")
                 roi = ((f['총평가금']-f['총투자금'])/f['총투자금']*100) if f['총투자금'] > 0 else 0
-                m3.metric("누적 수익률", f"{roi:.1f}%")
+                c3.metric("누적 수익률", f"{roi:.1f}%")
                 
+                st.subheader("📈 자산 성장 추이")
                 st.line_chart(res[['총평가금', '총투자금']])
                 
                 with st.expander("📝 상세 내역 보기"):
