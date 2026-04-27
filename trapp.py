@@ -58,7 +58,7 @@ with st.sidebar:
             mkt = st.radio(f"시장 #{i+1}", ["한국", "미국"], key=f"m_{i}", horizontal=True)
             
             if mkt == "한국":
-                search = st.text_input(f"종목명 검색 #{i+1}", "KODEX 200", key=f"s_{i}")
+                search = st.text_input(f"종목명 검색 #{i+1}", "미국AI", key=f"s_{i}")
                 if not kr_list.empty:
                     filtered = kr_list[kr_list['Name'].str.contains(search, na=False, case=False)]
                     if not filtered.empty:
@@ -73,17 +73,17 @@ with st.sidebar:
                 else:
                     code, name = None, None
             else:
-                code = st.text_input(f"미국 티커 #{i+1}", "QQQ", key=f"c_{i}").upper()
+                code = st.text_input(f"미국 티커 #{i+1}", "QQQM", key=f"c_{i}").upper()
                 name = code
             
-            q = st.number_input(f"현재 수량 #{i+1}", min_value=0.0, value=10.0, key=f"q_{i}")
-            v = st.number_input(f"월 적립금(원) #{i+1}", min_value=0, value=300000, key=f"v_{i}")
-            d = st.number_input(f"월 분배율(%) #{i+1}", 0.0, 5.0, 0.5, key=f"d_{i}")
+            q = st.number_input(f"현재 수량 #{i+1}", min_value=0.0, value=5090.0, key=f"q_{i}")
+            v = st.number_input(f"월 적립금(원) #{i+1}", min_value=0, value=0, key=f"v_{i}")
+            d = st.number_input(f"월 분배율(%) #{i+1}", 0.0, 5.0, 1.25, key=f"d_{i}")
             etf_configs.append({'idx':i+1, 'code':code, 'name':name, 'mkt':mkt, 'qty':q, 'val':v, 'dist':d})
 
     st.header("📅 시나리오 설정")
     start_date = st.date_input("투자 시작일", datetime.now())
-    end_date = st.date_input("투자 종료일", datetime(2030, 12, 31))
+    end_date = st.date_input("투자 종료일", datetime(2032, 6, 30))
     growth = st.slider("연 성장률(%)", -10, 20, 5)
     reinvest = st.checkbox("분배금 재투자", value=True)
 
